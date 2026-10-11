@@ -1,0 +1,102 @@
+name: dsx-adapter-lab
+
+# Single-site Exchange event-bus test subset: isolated NATS (MQTT 3.1.1 +
+# JetStream) broker, this Go bridge, and a self-contained scenario runner.
+# This is not the full upstream DSX Exchange stack and not a connection to
+# any NVIDIA-hosted Omniverse environment. No secret ever leaves the
+# "secrets" named volume; nothing here is published outside loopback.
+
+x-lab-image: &lab-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  init:
+    <<: *lab-image
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/dsx-lab", "init"]
+    environment:
+      DSX_SECRETS_DIR: /secrets
+      DSX_SIGNER_KID: gridmetry-lab-signer-1
+      DSX_MQTT_TOPIC: grid/v1/isv/gridmetry/loadtarget/set
+      DSX_PUBLISHER_USER: gridmetry
+      DSX_BRIDGE_USER: bridge
+      DSX_MQTT_LISTEN_ADDR: "0.0.0.0:1883"
+      DSX_HTTP_MONITOR_ADDR: "0.0.0.0:8222"
+      DSX_JETSTREAM_DIR: /data
+      DSX_OWNER_UID: "10001"
+      DSX_OWNER_GID: "10001"
+    volumes:
+      - secrets:/secrets
+
+  broker:
+    image: nats:2.12.6-alpine
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command: ["-c", "/secrets/nats.conf"]
+    volumes:
+      - secrets:/secrets:ro
+      - natsdata:/data
+    ports:
+      # Dev convenience only: MQTT reachable from the host via loopback.
+      # Never bind 0.0.0.0 here; raw NATS (4222) is not published at all.
+      - "127.0.0.1:1883:1883"
+
+  bridge:
+    <<: *lab-image
+    user: "10001:10001"
+    entrypoint: ["/usr/local/bin/dsx-lab", "serve"]
+    depends_on:
+      broker:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
+    environment:
+      DSX_MQTT_BROKER_URL: "tcp://broker:1883"
+      DSX_MQTT_CLIENT_ID: dsx-bridge
+      DSX_MQTT_TOPIC: grid/v1/isv/gridmetry/loadtarget/set
+      DSX_MQTT_CREDENTIALS_PATH: /secrets/mqtt-bridge-credentials.json
+      DSX_FEED_TAG: main-a
+      DSX_MAX_WATTS: "1000000"
+      DSX_MAX_EVENT_AGE: 5m
+      DSX_MAX_CLOCK_SKEW: 30s
+      DSX_SIGNER_KID: gridmetry-lab-signer-1
+      DSX_SIGNER_SOURCE: "//grid/v1/isv/gridmetry"
+      DSX_SIGNING_PUBLIC_KEY_PATH: /secrets/signing-public.pem
+      DSX_SSE_TOKEN_PATH: /secrets/sse-token
+      DSX_HTTP_ADDR: "0.0.0.0:8090"
+      DSX_CORS_ALLOW_ORIGIN: ""
+    volumes:
+      - secrets:/secrets:ro
+    ports:
+      # Dev convenience only: never bind 0.0.0.0 here.
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dsx-lab", "check", "--url", "http://localhost:8090/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  scenario:
+    <<: *lab-image
+    user: "10001:10001"
+    entrypoint: ["/usr/local/bin/dsx-lab", "scenario"]
+    profiles: ["scenario"]
+    depends_on:
+      bridge:
+        condition: service_healthy
+    environment:
+      DSX_EVENTS_URL: "http://bridge:8090/events"
+      DSX_MQTT_BROKER_URL: "tcp://broker:1883"
+      DSX_MQTT_TOPIC: grid/v1/isv/gridmetry/loadtarget/set
+      DSX_SIGNER_KID: gridmetry-lab-signer-1
+      DSX_SECRETS_DIR: /secrets
+    volumes:
+      - secrets:/secrets:ro
+
+volumes:
+  secrets: {}
+  natsdata: {}

@@ -1,0 +1,11 @@
+# Integration-test-only override: never bind fixed host ports, so a
+# parallel integration test run (or this test running alongside a human's
+# own `docker compose up -d` demo stack) cannot collide on 127.0.0.1:8090
+# or 127.0.0.1:1883. The scenario/test driver only needs the project's
+# internal Docker network (service names "bridge"/"broker"), not host
+# access.
+services:
+  broker:
+    ports: []
+  bridge:
+    ports: []

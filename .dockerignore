@@ -1,0 +1,12 @@
+omniverse.key
+*.key
+.env
+.env.*
+secrets/
+.git/
+plan/
+/dsx-access
+/cmd/dsx-access/dsx-access
+/dsx-lab
+/cmd/dsx-lab/dsx-lab
+/bin/

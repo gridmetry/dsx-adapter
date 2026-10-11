@@ -1,0 +1,15 @@
+omniverse.key
+*.key
+.env
+.env.*
+!.env.example
+secrets/
+
+# Go build output (Phase 1 CLI)
+/dsx-access
+/cmd/dsx-access/dsx-access
+/bin/
+
+# Go build output (Phase 2 lab binary)
+/dsx-lab
+/cmd/dsx-lab/dsx-lab
