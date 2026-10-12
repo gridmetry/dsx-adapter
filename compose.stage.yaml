@@ -1,0 +1,9 @@
+services:
+  broker:
+    ports: !override
+      - "127.0.0.1:21883:1883"
+  bridge:
+    environment:
+      DSX_CORS_ALLOW_ORIGIN: "https://build.nvidia.com"
+    ports: !override
+      - "127.0.0.1:28090:8090"

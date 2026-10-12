@@ -8,7 +8,7 @@ Demonstrate one signed DSX Flex command passing through a local Exchange event-b
 
 ## Phase 2 Execution Scope (2026-10-11)
 
-**Execution result:** Code implemented and reviewed `APPROVED`; native real-broker acceptance, unit/race/vet checks passed. Compose configuration and image build passed, but containerized acceptance fails before init startup because the local Docker shim is incompatible. See [dsx-connectivity-mvp-phase-2-complete.md](dsx-connectivity-mvp-phase-2-complete.md). Do not mark the container or hosted gates passed from native test results.
+**Execution result:** Code implemented and reviewed `APPROVED`; native real-broker acceptance, unit/race/vet checks passed. Containerized signed-command delivery, test port isolation and broker outage/reconnect acceptance also passed on 2026-10-11 after correcting the integration override to `!reset []`. The earlier Docker shim error was no longer reproducible; no daemon repair was made by this task. See [dsx-connectivity-mvp-phase-2-complete.md](dsx-connectivity-mvp-phase-2-complete.md). The hosted Omniverse gate remains separate and unverified.
 
 The architect requested implementation, test cases and review. Phase 2 is authorized; Phase 1 is complete. The next runnable acceptance check is a signed immediate one-feed loadtarget command through Compose-hosted NATS/MQTT 3.1.1 into the Go bridge and out through an authenticated local event stream. This is message delivery, not remote execution or power delivery.
 

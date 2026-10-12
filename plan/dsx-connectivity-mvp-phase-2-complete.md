@@ -1,6 +1,6 @@
 # Phase 2 Implementation: Local DSX Message Bridge
 
-**Code/review status:** Implemented and `APPROVED`. **Container acceptance:** `BLOCKED` by the local Docker runtime. This record does not claim the Compose stack or overall MVP is fully verified.
+**Code/review status:** Implemented and `APPROVED`. **Container acceptance:** `PASSED` on 2026-10-11 after fixing the test-only port override. The hosted Omniverse phase and overall MVP remain incomplete.
 
 ## Delivered
 
@@ -33,6 +33,18 @@ Queued commands are revalidated for age at processing time, deliberately failing
 
 ## Actual Verification
 
+### Container Gate Resolved
+
+On recheck, the existing Docker daemon successfully ran `dsx-adapter-lab-init help`; the original shim failure was no longer reproducible. No daemon restart, runtime modification or interruption of existing services was performed by this task.
+
+The first Compose rerun exposed a distinct test defect: `ports: []` left the base host bindings in place, colliding with an existing service on port 8090. After explicit user approval, changed only the integration override to `ports: !reset []` and added `TestComposeOverrideClearsPublishedPorts`, which JSON-parses the effective Compose configuration. The regression failed before the fix and passed afterward.
+
+`go test -tags integration ./integration -run '^(TestComposeOverrideClearsPublishedPorts|TestScenarioAcceptsOneSignedCommand|TestBridgeReadinessDropsAndReturnsAcrossBrokerRestart)$' -v -count=1 -timeout=8m` passed all three tests in 22.610 seconds. Signed-command delivery passed in 12.83 seconds, port isolation in 0.06 seconds and broker outage/reconnect in 9.71 seconds. Parent independently reran the isolation regression and tagged vet successfully. Final two-file fix review returned `APPROVED`.
+
+The tests started actual Compose containers and cleaned up their own projects/volumes. Existing `on-site-b` and `site-proxy` services remained running. Docker Compose 2.39.4 was used; the reset-tag override requires Compose 2.24+. No NVIDIA credentials or hosted sessions were used.
+
+### Earlier Checks
+
 Parent-run final checks on 2026-10-11:
 
 - `go test ./...`: passed for all eight default packages.
@@ -47,11 +59,11 @@ The native integration test used real `nats-server v2.12.6` and a freshly built 
 
 Manual real-broker cap and release scenarios also passed, with `constraint_watts: 800000` and a separate `release: true` event. The temporary manual broker/bridge processes were stopped and their PIDs checked. The automated native test cleans up its own subprocesses/files. No hosted session was started.
 
-The runtime diagnosis found Docker's daemon-associated containerd `v2.2.0` alongside a system `containerd-shim-runc-v2` reporting `2.2.1`, consistent with mixed runtime binaries. The shared Docker daemon, mounted tooling and unrelated services were not changed. The exact runtime repair remains an operator prerequisite; this phase does not prescribe an unverified daemon modification.
+The earlier runtime diagnosis found Docker's daemon-associated containerd `v2.2.0` alongside a system `containerd-shim-runc-v2` reporting `2.2.1`, consistent with mixed runtime binaries. That earlier failure is preserved as history, not a current blocker. The daemon had changed before the successful recheck; the precise external repair was not established or attributed to this task.
 
 ## Review Status and Remaining Gates
 
-Final code review returned **APPROVED**, with no material findings. Reviewer source/diagnostics checks are separate from the parent/implementer's terminal results above. The Docker acceptance test must pass on a working runtime before marking container execution complete. Do not proceed to a hosted scene claim without the supported DSX session/authentication contract.
+Final code review and the subsequent test-isolation fix review returned **APPROVED**, with no material findings. Reviewer source/diagnostics checks are separate from the parent/implementer's terminal results above. Container acceptance is now complete for the tested local Phase 2 flow. Do not proceed to a hosted scene claim without the supported DSX session/authentication contract.
 
 The normalized SSE event proves a validated command was received. It is not a DSX execution ACK or delivered-power measurement. Dedup is in-memory/best-effort, not durable or cryptographic replay protection; the lab broker remains plaintext/root-process and is not a production deployment.
 

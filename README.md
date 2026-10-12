@@ -120,6 +120,38 @@ docker compose run --rm scenario
 
 `broker` listens on `127.0.0.1:1883` (host loopback only; never publicly exposed) and `bridge` serves `0.0.0.0:8090` inside its container, published to the host as `127.0.0.1:8090`. `scenario` and `bridge` run as uid/gid `10001:10001`; `init` runs as root only to `chown`/`chmod` the generated secrets (dirs `0700`, files `0600`/`0640`) before dropping to that uid. Generated credentials are never printed, logged, or baked into the image; they live only in the `secrets` named volume (excluded from Git/Docker build contexts). The NATS broker container itself is left running as its image default (root) so it can read the root-written/owned `0640` config and manage its own `natsdata` JetStream volume; this is a documented simplification, not a hardening claim about the broker process.
 
+### Staged Live Test
+
+An isolated `dsx-adapter-staged` project is available using [compose.stage.yaml](compose.stage.yaml). It publishes MQTT at `127.0.0.1:21883` and HTTP at `127.0.0.1:28090`, leaving the existing site proxy on port 8090 untouched. The override uses Compose's `!override` tag, requiring Docker Compose 2.24.4+; its merged bindings were verified with Compose 2.39.4. Generic YAML editors may flag that Compose-specific tag even though Compose accepts it.
+
+Run from this project directory:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml up -d --build --wait --wait-timeout 90 broker bridge
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --build --no-deps scenario --watts 800000
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --no-deps scenario --release
+```
+
+The scenario opens an authenticated SSE connection using generated lab credentials inside its container, publishes a fresh signed command, then reports the matching receipt event. It does not need the NVIDIA key and does not connect to Omniverse.
+
+Check the staged service and counters:
+
+```sh
+curl --fail http://127.0.0.1:28090/readyz
+curl --fail http://127.0.0.1:28090/healthz
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml ps
+```
+
+On 2026-10-12 the cap and release both passed. A signed zero-watt request was rejected without increasing accepted count; an unauthenticated `/events` request returned HTTP 401. Final counters were `accepted: 2`, `rejected: 1`, and zero duplicates, queue drops and expired commands. Counters will change as scenarios are repeated. Services were intentionally left running after this test.
+
+To stop this staging project without deleting its credential or broker-data volumes:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml down
+```
+
+These results establish real local MQTT-to-SSE interoperability. `800000` is the requested constraint in watts, not measured power consumption or verified curtailment. Hosted Omniverse scene changes remain Phase 3 work.
+
 ### Tests
 
 ```sh
@@ -140,6 +172,8 @@ go test -tags integration ./integration/...
 
 It brings up an isolated `docker compose -p dsxlab-it-<random>` project (host ports disabled via `integration/override.yaml`, so it cannot collide with a human's own running demo stack), runs `init`/`up`/the `scenario` container, and asserts the scenario observed a matching received event; a second test in the same suite stops, then restarts, the `broker` container and asserts the bridge's `/readyz` (checked directly from inside the bridge container with the same `check` subcommand its Compose healthcheck uses, not inferred from Compose's health-string polling interval) drops while the broker is down and returns once resubscribed, followed by a post-reconnect `scenario` run. Both always tear their own stack down (`down -v`), never the operator's.
 
+The integration suite requires Docker Compose 2.24+ for `ports: !reset []`. Plain `ports: []` does not clear inherited host bindings. `TestComposeOverrideClearsPublishedPorts` verifies the actual merged configuration before relying on that isolation.
+
 A third, Docker-free variant (`integration/native_test.go`, same build tag) exercises the identical broker+bridge+SSE contract without any container runtime: a real external `nats-server` binary (MQTT 3.1.1 + JetStream) and a `dsx-lab` built fresh from this repo are started as plain, bounded, test-owned subprocesses on randomly reserved loopback ports. It is skipped, not failed, unless an external `nats-server` binary is explicitly opted in:
 
 ```sh
@@ -159,9 +193,10 @@ It asserts a signed accept command and a signed release command each flow end to
 ### Observed results (this environment)
 
 - `go build ./...`, `go test ./...`, `go test -race ./...`, `go vet ./...` all pass; `gofmt -l` is clean for every Phase 2 file (one pre-existing, untouched Phase 1 file — `cmd/dsx-access/main_test.go` — is flagged by `gofmt -l` from before this phase).
-- The native (Docker-free) suite above was actually run live in this environment against a real `nats-server v2.12.6` binary and a freshly built `dsx-lab`: `DSX_NATS_SERVER=/workspace/bin/nats-server go test -tags integration ./integration -run '^TestNative' -v -race -count=1` passed (`TestNativeBrokerBridgeScenario`, ~2.7s), including the broker SIGTERM/restart readiness drop-and-recovery and post-restart delivery. This is distinct evidence from, and does not substitute for, the Docker-backed `docker compose`/`TestScenarioAcceptsOneSignedCommand`/`TestBridgeReadinessDropsAndReturnsAcrossBrokerRestart` suite below, which remains unexercised in this sandbox for the unrelated containerd/shim reason described next.
+- The native (Docker-free) suite above was actually run live in this environment against a real `nats-server v2.12.6` binary and a freshly built `dsx-lab`: `DSX_NATS_SERVER=/workspace/bin/nats-server go test -tags integration ./integration -run '^TestNative' -v -race -count=1` passed (`TestNativeBrokerBridgeScenario`, ~2.7s), including the broker SIGTERM/restart readiness drop-and-recovery and post-restart delivery. This is separate from the successful Docker-backed verification below.
 - `docker compose config` and `docker compose --profile scenario config --services` both resolve all four services correctly; `docker compose build init` succeeds against the pinned, registry-verified base images (`golang:1.25.11-bookworm`, `gcr.io/distroless/static-debian12:nonroot`, `nats:2.12.6-alpine`), producing a ~10 MB final image.
-- **`docker compose run`/`up` (actual container execution) could not be exercised in this sandbox**: `docker run --rm hello-world` fails identically with `Error response from daemon: failed to create task for container: Unimplemented: failed to start shim: start failed: unsupported shim version (3): not implemented`, a containerd/shim version mismatch between the Docker daemon's own embedded containerd (`v2.2.0`, per `docker version`/`docker info`) and the host's separately installed `containerd-shim-runc-v2` binary on `PATH` (`v2.2.1`, from the `containerd` apt package) in this nested dev-container host, unrelated to this repository's Dockerfile/compose.yaml. The commands above are therefore verified for syntax/build correctness but not for a live end-to-end run here; an operator with a working Docker runtime should run the three `docker compose` commands above (and optionally `go test -tags integration ./integration/...`) to get that live evidence.
+- **Docker-backed acceptance now passes (2026-10-11).** The previous `unsupported shim version (3)` failure is no longer reproducible; the daemon was already working when rechecked, and no daemon changes were made during this verification. A separate port collision exposed the ineffective integration override; replacing it with `!reset []` fixed that test setup without interrupting existing services.
+- `go test -tags integration ./integration -run '^(TestComposeOverrideClearsPublishedPorts|TestScenarioAcceptsOneSignedCommand|TestBridgeReadinessDropsAndReturnsAcrossBrokerRestart)$' -v -count=1 -timeout=8m` passed all three tests in 22.610 seconds: signed MQTT-to-SSE delivery, merged-config port isolation, and broker outage/reconnect delivery. Test-owned containers/volumes were cleaned up; existing `on-site-b` and `site-proxy` remained running. `go vet -tags integration ./integration` also passed. The demo's fixed loopback ports still need to be free when starting the non-test Compose stack.
 
 ## Planned (Not Yet Built)
 

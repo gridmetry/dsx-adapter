@@ -4,8 +4,14 @@
 # or 127.0.0.1:1883. The scenario/test driver only needs the project's
 # internal Docker network (service names "bridge"/"broker"), not host
 # access.
+#
+# `ports: []` alone is a no-op: Compose's default merge appends override
+# list entries onto the base file's list rather than replacing it, so an
+# empty list here never clears compose.yaml's fixed bindings. `!reset`
+# (requires Compose 2.24+; this repo targets 2.39.4) forces a full
+# replace instead of an append.
 services:
   broker:
-    ports: []
+    ports: !reset []
   bridge:
-    ports: []
+    ports: !reset []

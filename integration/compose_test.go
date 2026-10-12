@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -110,6 +111,50 @@ func TestScenarioAcceptsOneSignedCommand(t *testing.T) {
 		t.Fatalf("scenario did not report a matching received event; output:\n%s", out)
 	}
 	t.Logf("scenario output:\n%s", out)
+}
+
+// composePort mirrors the subset of `docker compose config --format
+// json`'s per-service port entry this test needs; unused fields are
+// omitted.
+type composePort struct {
+	Target    int    `json:"target"`
+	Published string `json:"published"`
+}
+
+type composeConfigOutput struct {
+	Services map[string]struct {
+		Ports []composePort `json:"ports"`
+	} `json:"services"`
+}
+
+// TestComposeOverrideClearsPublishedPorts guards against override.yaml's
+// `ports: []` silently failing to clear the base compose file's fixed
+// host bindings: Compose's default list-merge behavior appends rather
+// than replaces, so an empty override list is a no-op and the base
+// 127.0.0.1:1883/8090 bindings leak through. This only renders the
+// merged config (no containers start), so it never touches a human's own
+// `docker compose up -d` demo stack.
+func TestComposeOverrideClearsPublishedPorts(t *testing.T) {
+	project := randomProjectName(t)
+	out, err := runCompose(t, project, "config", "--format", "json")
+	if err != nil {
+		t.Fatalf("compose config failed: %v\n%s", err, out)
+	}
+
+	var cfg composeConfigOutput
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatalf("parsing compose config json: %v", err)
+	}
+
+	for _, name := range []string{"broker", "bridge"} {
+		svc, ok := cfg.Services[name]
+		if !ok {
+			t.Fatalf("service %q missing from compose config output", name)
+		}
+		if len(svc.Ports) != 0 {
+			t.Fatalf("service %q still has %d published port(s) after override, want 0", name, len(svc.Ports))
+		}
+	}
 }
 
 // waitForBridgeReady and waitForBridgeNotReady poll the bridge's actual
