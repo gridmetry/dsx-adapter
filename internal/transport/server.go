@@ -16,12 +16,13 @@ import (
 // token via query string and never logs the Authorization header or token
 // value.
 type Server struct {
-	Hub               *Hub
-	Token             string
-	AllowOrigin       string
-	Ready             func() bool
-	Stats             *lab.Stats
-	HeartbeatInterval time.Duration
+	Hub                 *Hub
+	Token               string
+	AllowOrigin         string
+	Ready               func() bool
+	Stats               *lab.Stats
+	HeartbeatInterval   time.Duration
+	VisualizationClient string
 	// Now, if set, is used instead of time.Now for the pre-write end_time
 	// expiry check, so tests can inject a deterministic clock.
 	Now func() time.Time
@@ -45,6 +46,15 @@ func (s *Server) Mux() http.Handler {
 	mux.HandleFunc("OPTIONS /events", s.handleEventsPreflight)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	if s.VisualizationClient != "" {
+		mux.HandleFunc("GET /visualization-client.js", func(w http.ResponseWriter, r *http.Request) {
+			s.applyCORS(w, r)
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			_, _ = w.Write([]byte(s.VisualizationClient))
+		})
+	}
 	return mux
 }
 

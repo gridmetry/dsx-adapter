@@ -113,6 +113,141 @@ func TestScenarioAcceptsOneSignedCommand(t *testing.T) {
 	t.Logf("scenario output:\n%s", out)
 }
 
+func TestInteractiveScenarioAcceptsMultipleSignedCommands(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Docker-backed integration test in -short mode")
+	}
+	project := randomProjectName(t)
+	t.Cleanup(func() {
+		if _, err := runComposeCleanup(t, project, "down", "-v", "--remove-orphans"); err != nil {
+			t.Logf("cleanup for %s: %v", project, err)
+		}
+	})
+	if output, err := runCompose(t, project, "run", "--rm", "--build", "init"); err != nil {
+		t.Fatalf("init failed: %v\n%s", err, output)
+	}
+	if output, err := runCompose(t, project, "up", "-d", "--build", "broker", "bridge"); err != nil {
+		t.Fatalf("stack failed: %v\n%s", err, output)
+	}
+	if !waitForBridgeReady(t, project, time.Minute) {
+		t.Fatal("test-owned bridge did not become ready")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+	defer cancel()
+	args := []string{"compose", "-p", project, "-f", "compose.yaml", "-f", "integration/override.yaml", "run", "--rm", "-T", "--no-deps", "--build", "scenario", "--interactive", "--duration", "30s"}
+	command := exec.CommandContext(ctx, "docker", args...)
+	command.Dir = ".."
+	command.Stdin = strings.NewReader("920000\nnot-a-command\n650000\n800000\nrelease\nquit\n")
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		t.Fatalf("interactive scenario failed: %v\n%s", err, output.String())
+	}
+	text := output.String()
+	if strings.Count(text, "MQTT connected") != 1 || strings.Count(text, "subscribed to event stream, ready") != 1 {
+		t.Fatalf("connections were not reused:\n%s", text)
+	}
+	const prefix = "received matching normalized event: "
+	ids := make(map[string]bool)
+	var receipts []struct {
+		ID      string   `json:"id"`
+		Watts   *float64 `json:"constraint_watts"`
+		Release bool     `json:"release"`
+	}
+	for _, line := range strings.Split(text, "\n") {
+		index := strings.Index(line, prefix)
+		if index < 0 {
+			continue
+		}
+		var receipt struct {
+			ID      string   `json:"id"`
+			Watts   *float64 `json:"constraint_watts"`
+			Release bool     `json:"release"`
+		}
+		if err := json.Unmarshal([]byte(line[index+len(prefix):]), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.ID == "" || ids[receipt.ID] {
+			t.Fatal("command identifiers were reused")
+		}
+		ids[receipt.ID] = true
+		receipts = append(receipts, receipt)
+	}
+	if len(receipts) != 4 || !receipts[3].Release || receipts[3].Watts != nil {
+		t.Fatalf("expected three targets and one release:\n%s", text)
+	}
+	for index, expected := range []float64{920000, 650000, 800000} {
+		if receipts[index].Watts == nil || *receipts[index].Watts != expected || receipts[index].Release {
+			t.Fatal("unexpected target receipt")
+		}
+	}
+	if strings.Contains(text, "not-a-command") {
+		t.Fatal("untrusted terminal input was echoed")
+	}
+	t.Log("three signed targets and one release verified with one MQTT/SSE session")
+}
+
+func TestStagedInteractiveScenarioAcceptsFullLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Docker-backed integration test in -short mode")
+	}
+	project := randomProjectName(t)
+	execute := func(input string, args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+		defer cancel()
+		base := []string{"compose", "-p", project, "-f", "compose.yaml", "-f", "compose.stage.yaml", "-f", "integration/override.yaml"}
+		command := exec.CommandContext(ctx, "docker", append(base, args...)...)
+		command.Dir = ".."
+		command.Stdin = strings.NewReader(input)
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+	t.Cleanup(func() {
+		if _, err := runComposeCleanup(t, project, "down", "-v", "--remove-orphans"); err != nil {
+			t.Logf("cleanup for %s: %v", project, err)
+		}
+	})
+	if output, err := execute("", "run", "--rm", "--build", "init"); err != nil {
+		t.Fatalf("init failed: %v\n%s", err, output)
+	}
+	if output, err := execute("", "up", "-d", "--build", "broker", "bridge"); err != nil {
+		t.Fatalf("stack failed: %v\n%s", err, output)
+	}
+	if !waitForBridgeReady(t, project, time.Minute) {
+		t.Fatal("test-owned staged bridge did not become ready")
+	}
+	output, err := execute("1316000\nrelease\nquit\n", "run", "--rm", "-T", "--no-deps", "--build", "scenario", "--interactive", "--duration", "30s")
+	if err != nil {
+		t.Fatalf("full-load publisher failed: %v\n%s", err, output)
+	}
+	var loads []int
+	var powers []int
+	for _, line := range strings.Split(output, "\n") {
+		const prefix = "received matching normalized event: "
+		index := strings.Index(line, prefix)
+		if index < 0 {
+			continue
+		}
+		var receipt struct {
+			Visualization struct {
+				LoadPercent int    `json:"load_percent"`
+				PowerWatts  int    `json:"displayed_power_watts"`
+				EDPSetting  string `json:"edp_setting"`
+			} `json:"visualization"`
+		}
+		if err := json.Unmarshal([]byte(line[index+len(prefix):]), &receipt); err != nil || receipt.Visualization.EDPSetting != "1.2" {
+			t.Fatal("incorrect staged profile receipt")
+		}
+		loads = append(loads, receipt.Visualization.LoadPercent)
+		powers = append(powers, receipt.Visualization.PowerWatts)
+	}
+	if len(loads) != 2 || loads[0] != 100 || powers[0] != 1316000 || loads[1] != 80 || powers[1] != 1052000 {
+		t.Fatalf("full-load and release mapping incorrect:\n%s", output)
+	}
+	t.Log("staged EDP 1.2 full-load target and baseline release verified")
+}
+
 // composePort mirrors the subset of `docker compose config --format
 // json`'s per-service port entry this test needs; unused fields are
 // omitted.

@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +15,7 @@ import (
 	"gridmetry/dsx-adapter/internal/bridge"
 	"gridmetry/dsx-adapter/internal/flex"
 	"gridmetry/dsx-adapter/internal/lab"
+	"gridmetry/dsx-adapter/internal/presentation"
 	"gridmetry/dsx-adapter/internal/transport"
 )
 
@@ -25,6 +29,11 @@ func runServe(args []string) int {
 		return 1
 	}
 
+	visualization, err := visualizationFlags(args, cfg.FeedTag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dsx-lab serve: %v\n", err)
+		return 2
+	}
 	pubKeyBytes, err := lab.ReadBoundedFile(cfg.PublicKeyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dsx-lab serve: reading signing public key: %v\n", err)
@@ -48,6 +57,7 @@ func runServe(args []string) int {
 	stats := &lab.Stats{}
 	hub := transport.NewHub(64)
 	pipeline := bridge.NewPipeline(codec, hub, stats, 256)
+	pipeline.Visualization = visualization
 
 	done := make(chan struct{})
 	go pipeline.Run(done)
@@ -71,6 +81,9 @@ func runServe(args []string) int {
 		AllowOrigin: cfg.CORSAllowOrigin,
 		Ready:       sub.Ready,
 		Stats:       stats,
+	}
+	if visualization != nil {
+		server.VisualizationClient = visualization.BrowserClient()
 	}
 	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Mux()}
 
@@ -102,4 +115,29 @@ func runServe(args []string) int {
 	sub.Close(250)
 	close(done)
 	return 0
+}
+
+func visualizationFlags(args []string, feedTag string) (*presentation.Mapper, error) {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	edp := flags.String("visual-edp", "", "enable visualization mapping for EDP 1.2 or 1.5")
+	baseline := flags.Int("visual-baseline-load", 80, "unconstrained visualization baseline percent")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return nil, errors.New("invalid visualization flags")
+	}
+	if *edp == "" {
+		baselineProvided := false
+		flags.Visit(func(option *flag.Flag) {
+			if option.Name == "visual-baseline-load" {
+				baselineProvided = true
+			}
+		})
+		if baselineProvided {
+			return nil, errors.New("visual baseline requires visual EDP")
+		}
+		return nil, nil
+	}
+	return presentation.NewMapper(presentation.Config{
+		FeedTag: feedTag, EDPSetting: *edp, BaselineLoadPercent: *baseline,
+	})
 }

@@ -9,6 +9,7 @@ import (
 
 	"gridmetry/dsx-adapter/internal/flex"
 	"gridmetry/dsx-adapter/internal/lab"
+	"gridmetry/dsx-adapter/internal/presentation"
 )
 
 type fakeHub struct {
@@ -242,6 +243,63 @@ func TestPipelineEnqueueDropsWhenQueueFull(t *testing.T) {
 	}
 	if stats.Snapshot().QueueDropped != 1 {
 		t.Fatalf("expected 1 queue_dropped, got %+v", stats.Snapshot())
+	}
+}
+
+func TestPipelineAddsVisualizationToVerifiedCommand(t *testing.T) {
+	fixture := newBridgeTestFixture(t)
+	now := time.Now().UTC()
+	hub := &fakeHub{}
+	pipeline := NewPipeline(fixture.codec, hub, &lab.Stats{}, 8)
+	mapper, err := presentation.NewMapper(presentation.Config{FeedTag: "main-a", EDPSetting: "1.5", BaselineLoadPercent: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline.Visualization = mapper
+	payload := map[string]any{
+		"targets": []map[string]any{{
+			"interval":        map[string]any{},
+			"load_constraint": map[string]any{"value": 920000, "unit": "watt"},
+		}},
+	}
+	raw := fixture.envelope(now, "d4f6a1d2-3e5b-4a7c-8d9e-0f1a2b3c4d5e", payload)
+	pipeline.process(InboundMessage{Topic: "grid/v1/isv/gridmetry/loadtarget/set", Payload: raw, Received: now})
+	if hub.count() != 1 {
+		t.Fatal("verified command was not published")
+	}
+	var received struct {
+		flex.NormalizedEvent
+		Visualization presentation.Command `json:"visualization"`
+	}
+	if err := json.Unmarshal(hub.published[0], &received); err != nil {
+		t.Fatal(err)
+	}
+	if received.Type != flex.CommandReceivedType || received.Visualization.ID != received.ID || received.Visualization.LoadPercent != 60 || received.Visualization.DisplayedPowerWatts != 920000 {
+		t.Fatalf("unexpected verified visualization: %+v", received)
+	}
+	pipeline.process(InboundMessage{Payload: []byte("unsigned invalid input"), Received: now})
+	if hub.count() != 1 {
+		t.Fatal("rejected input reached visualization output")
+	}
+}
+
+func TestPipelineMapsReleaseToConfiguredBaseline(t *testing.T) {
+	codec, raw := buildCodecAndEnvelope(t)
+	hub := &fakeHub{}
+	pipeline := NewPipeline(codec, hub, &lab.Stats{}, 8)
+	pipeline.Visualization, _ = presentation.NewMapper(presentation.Config{FeedTag: "main-a", EDPSetting: "1.5", BaselineLoadPercent: 80})
+	pipeline.process(InboundMessage{Payload: raw, Received: time.Now()})
+	if hub.count() != 1 {
+		t.Fatal("release receipt missing")
+	}
+	var received struct {
+		Visualization presentation.Command `json:"visualization"`
+	}
+	if err := json.Unmarshal(hub.published[0], &received); err != nil {
+		t.Fatal(err)
+	}
+	if !received.Visualization.Release || received.Visualization.LoadPercent != 80 {
+		t.Fatal("release did not restore the configured baseline")
 	}
 }
 

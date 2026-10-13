@@ -1,5 +1,6 @@
 omniverse.key
 *.key
+*.token
 .env
 .env.*
 secrets/

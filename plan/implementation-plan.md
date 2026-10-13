@@ -18,6 +18,20 @@ Compose generates isolated local MQTT identities, an ES256 signing key and an ev
 
 The NVCF configuration advertised by the public DSX page was identified during later research, but metadata lookup failed with HTTP 404 at the NVCF API and HTTP 403 at the frontend-advertised NGC base. Hosted-session client authorization remains an independent Phase 3 gate. No hosted allocation or scene commands are part of Phase 2.
 
+## Phase 3 Connection Check (2026-10-12)
+
+The architect explicitly approved one connection test of at most 60 seconds to the browser-observed DSX blueprint gateway, using the real local Origin, no API-key injection, no retries and no scene changes. That single authorization has been consumed; it does not authorize another live attempt or a scene command.
+
+An experimental official-SDK probe under `plan/` passes offline route, credential, one-attempt and reporting checks. Its pre-live safety review was `APPROVED` after correcting worker/frame escape coverage, timeouts, outgoing datachannel suppression and measured browser cleanup. The one live attempt failed before successful WebSocket upgrade/media; one socket was forwarded and an SDK retry was blocked. Client shutdown was verified after 1.553 seconds. Node TLS connectivity to NGC succeeded independently, but the browser failure's cause was not captured. Hosted connection and scene demonstration acceptance remain unmet. See `plan/journey.md`, Checkpoint 027, for exact evidence; obtain fresh authorization before any additional live diagnostic.
+
+## Phase 3 Browser Receiver POC Verification (2026-10-13)
+
+The architect approved reusing the working NVIDIA page, an authenticated page-side event receiver, signed target/release demonstrations and UI restoration. The receiver is installed into the existing authorized page session; it does not establish a new standalone SDK connection. The staged profile enables the conservative mapper for main-a, EDP 1.5 and an 80% unconstrained baseline. The default Compose lab remains receipt-only.
+
+The live second target/release pair passed with exact command-ID correlation between adapter and browser: target `8a3d45d5-01cb-43d8-a90e-2c19d7765b75` produced 60% / 920 kW, and release `0e00c0d8-f82d-4eca-b9af-6634298a46db` produced 80% / 1,224 kW. Disconnect restored the captured stopped 0% state. The first target passed, but its release was not observed before the two-minute receiver limit; it is not counted as a complete pair. See `plan/journey.md`, Checkpoint 035.
+
+The UI-interoperability POC is verified. Keep the remaining acceptance limits explicit: no metered power, GPU/workload response, remote execution acknowledgement or separately verified scene-color transition; the upstream Exchange deployment and persistent standalone hosted client are not demonstrated. Browser reload/session expiry and manual token connection remain lifecycle limitations. Further sessions and scene tests still require authorization; this record is not an unlimited allocation grant.
+
 ## Verified Access State
 
 Read-only requests against `https://api.nvcf.nvidia.com` using process-loaded credentials succeeded on 2026-10-10:

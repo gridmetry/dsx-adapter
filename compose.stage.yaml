@@ -1,9 +1,16 @@
+x-visual-max-watts: &visual-max-watts "1316000"
+
 services:
   broker:
     ports: !override
       - "127.0.0.1:21883:1883"
   bridge:
+    command: ["--visual-edp", "1.2", "--visual-baseline-load", "80"]
     environment:
       DSX_CORS_ALLOW_ORIGIN: "https://build.nvidia.com"
+      DSX_MAX_WATTS: *visual-max-watts
     ports: !override
       - "127.0.0.1:28090:8090"
+  scenario:
+    environment:
+      DSX_MAX_WATTS: *visual-max-watts

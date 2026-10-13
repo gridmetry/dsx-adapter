@@ -198,9 +198,67 @@ It asserts a signed accept command and a signed release command each flow end to
 - **Docker-backed acceptance now passes (2026-10-11).** The previous `unsupported shim version (3)` failure is no longer reproducible; the daemon was already working when rechecked, and no daemon changes were made during this verification. A separate port collision exposed the ineffective integration override; replacing it with `!reset []` fixed that test setup without interrupting existing services.
 - `go test -tags integration ./integration -run '^(TestComposeOverrideClearsPublishedPorts|TestScenarioAcceptsOneSignedCommand|TestBridgeReadinessDropsAndReturnsAcrossBrokerRestart)$' -v -count=1 -timeout=8m` passed all three tests in 22.610 seconds: signed MQTT-to-SSE delivery, merged-config port isolation, and broker outage/reconnect delivery. Test-owned containers/volumes were cleaned up; existing `on-site-b` and `site-proxy` remained running. `go vet -tags integration ./integration` also passed. The demo's fixed loopback ports still need to be free when starting the non-test Compose stack.
 
-## Planned (Not Yet Built)
+## Hosted Connection Probe (Experimental)
 
-Phase 3 (gated): a supported NVIDIA browser streaming SDK client connected to a verified, authorized DSX hosted session, translating one approved command into a visible scene update. No hosted session allocation, scene commands, or browser SDK code exist yet; see `plan/implementation-plan.md` for the gating conditions.
+[plan/hosted-connection-probe.mjs](plan/hosted-connection-probe.mjs) exercises the official streaming SDK against the browser-observed DSX signaling route. It is not wired to the Exchange bridge. It uses a real loopback Origin, no API key, one forwarded WebSocket at most, blocked outgoing datachannel payloads, and an owned browser process with a 60-second hard deadline.
+
+Safe validation commands:
+
+```sh
+node plan/hosted-connection-probe.mjs --self-test
+node plan/hosted-connection-probe.mjs --offline
+```
+
+The browser check requires Playwright, Chromium runtime libraries, and SDK 5.17.0 in the isolated `/root/.cache/dsx-browser-research` dependency directory, or a directory selected with `DSX_PROBE_DEPENDENCIES`. These dependencies are not part of the Go module. The offline check executes the SDK but blocks its remote signaling connection.
+
+One explicitly authorized `--live` attempt was run on 2026-10-12. The initial WebSocket failed before a successful upgrade was captured; the SDK's internal retry was blocked. No rendered frames or datachannels arrived, no datachannel payloads were sent, and the browser process exited after 1.553 seconds. A separate TLS-only control succeeded, but that does not identify the browser failure or prove an Origin rejection. Further live runs require fresh authorization. See [plan/journey.md](plan/journey.md) for the evidence and review results.
+
+## Browser Receiver POC
+
+Automatic signed target-to-hosted-UI delivery was verified on 2026-10-13. The staged adapter attaches a `visualization` mapping to accepted receipts. The token-free [internal/presentation/browser-receiver.js](internal/presentation/browser-receiver.js) consumes authenticated events and changes the existing NVIDIA page's Electrical controls; it does not open a separate streaming connection.
+
+The current staged profile uses EDP 1.2, zero failed RPPs and an unconstrained 80% startup/release baseline. The mapper searches the full 0-100% range for an integer load whose rounded displayed power does not exceed the requested cap; the startup baseline is not a ceiling. At EDP 1.2, 1,316,000 W maps to 100% / 1,316 kW, and release returns to 80% / 1,052 kW. The earlier live proof used EDP 1.5, where 920,000 W mapped to 60% / 920 kW and release to 80% / 1,224 kW; those historical results are unchanged.
+
+Set `--visual-edp` and `--visual-baseline-load` in [compose.stage.yaml](compose.stage.yaml). The adapter embeds that actual profile into the served browser client, so startup, readiness validation, release and interval expiry use the same settings. `x-visual-max-watts` supplies the common bridge/publisher target ceiling. Full displayed capacity is 1,316,000 W for EDP 1.2 and 1,532,000 W for EDP 1.5; the latter includes per-RPP rounding. Update the shared ceiling if you change EDP. The default non-staged lab still uses 1,000,000 W.
+
+Prerequisites: a live shared NVIDIA session with Electrical selected and a supported EDP/RPP setting; private Mac forwarding of port 28090; and the installed receiver connected using the generated local SSE token. The lab token is separate from the NVIDIA key and is entered directly into the widget, not chat. Refreshing removes the widget. It has no automatic reconnect, defaults to an eight-minute lifetime, and attempts to restore its captured UI baseline. Authentication and permanent stream errors still disconnect; temporary UI unavailability and all-panel failure pause actuation while keeping Flex reception available.
+
+While a watt constraint is active, manual EDP or failed-RPP changes no longer disconnect the receiver. It preserves those radio selections and recomputes the highest whole-percent load whose sum of healthy-RPP rounded values stays under the accepted watt target. For example, a 920,000 W cap at EDP 1.2 with one failed RPP maps to 69% / 909 kW, not 70% / 921 kW. The configured backend watt ceiling does not change when you change EDP in the UI.
+
+The receiver checks UI settings every 250 ms. Four failed RPPs report `paused_faults`; a hidden/unready Electrical view reports `paused_ui`. A pending valid target resumes when the UI becomes usable, and a newer accepted target supersedes it. Applied command IDs are counted once; adaptations are reported separately. Interval expiry retains a pending baseline restore if the UI is unavailable, with newer commands taking precedence. Release restores the configured baseline percentage using the current EDP/healthy RPP calculation; Disconnect restores captured load/running state but does not undo your manual EDP/failure selections. Widget power is the observed frontend calculation under those live settings, not the adapter profile's original estimate or physical metering.
+
+Set **Duration (minutes)** before clicking Connect; supported values are whole minutes from 1 to 10. The mount API also accepts an initial value, for example `GridmetryDSXReceiver.mount({ durationMinutes: 6 })`; calling `mount()` defaults to 8. The lifetime begins when Connect is submitted and is independent of NVIDIA's session timer. Choosing eight minutes does not extend an already-running NVIDIA session. Command interval expiry still follows its actual `end_time`, and manual Disconnect still restores the pre-test settings. Replace or reinstall an existing widget to load this version; deployed script changes do not modify page memory automatically.
+
+The token-free Console loader is saved in [plan/inject-browser-receiver.js](plan/inject-browser-receiver.js). Run its contents in the NVIDIA DSX page's DevTools Console to verify the deployed receiver fingerprint, disconnect/remove an older widget and mount a new idle widget. It does not enter a token, connect automatically or start a simulation session. The pinned fingerprint must be updated when the reviewed receiver source changes.
+
+With the receiver showing `receiving`, from this project directory:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --no-deps scenario --watts 920000
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --no-deps scenario --release
+```
+
+Verify each matching command ID in the receiver report and the UI before claiming completion. Release returns to the configured unconstrained baseline, not zero power; Disconnect restores the pre-test settings. This POC proves automatic UI interoperability and demo-calculated electrical values, not physical power delivery or a correlated remote Kit execution acknowledgement. A persistent standalone hosted client remains unverified. See [plan/journey.md](plan/journey.md), Checkpoint 035.
+
+### Interactive Flex Publisher
+
+Instead of starting a container for every target, run one publisher in the container terminal from this project directory:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --build --no-deps scenario --interactive
+```
+
+At `flex>`, enter a positive watt target up to the advertised configured ceiling (currently 1,316,000 W in the staged profile), or `release`, `help`, `quit`/`exit`. For example, enter `1316000`, then `920000`, checking the widget after each adapter receipt, then `release` and `quit`. Each accepted input gets a fresh signed command ID; the publisher reuses one MQTT connection and one authenticated event stream and waits for the matching adapter receipt before accepting the next command. Invalid input is not published.
+
+The publisher target ceiling defaults to `DSX_MAX_WATTS`, or 1,000,000 W if unset. `--max-watts` can override the publisher limit but cannot raise the bridge's acceptance policy. Keep both aligned through the staged shared ceiling. The publisher defaults to an eight-minute lifetime independent of the widget and NVIDIA session timers. Override it with `--interactive --duration 6m`; its maximum duration is 10 minutes. `--timeout 10s` controls the bounded per-command publish/receipt wait. Do not combine interactive mode with `--watts` or `--release`; enter those commands at the prompt instead.
+
+Send `release` explicitly before `quit` if you want to remove the constraint. Quit, EOF, Ctrl+C and publisher timeout close the publisher connections but do not publish an implicit release or disconnect the browser widget. Disconnect the widget separately to restore its captured pre-test UI settings. Stream or MQTT loss stops the interactive session; it does not automatically reconnect. Receipt success proves adapter delivery, not browser execution, so keep the widget showing `receiving` and verify its applied state.
+
+For scripted local testing without a TTY, pipe input and use Compose `-T`:
+
+```sh
+printf '920000\n650000\n800000\nrelease\nquit\n' | docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm -T --build --no-deps scenario --interactive
+```
 
 ## What It Is Not
 
@@ -208,11 +266,87 @@ This is not NVIDIA MaxLPS, and it does not provide real GPU power control. A sim
 
 The cloned Omniverse blueprint demonstrates digital-twin visualization and interactive scenarios. Its visible controls do not, by themselves, establish a headless GPU power-control or metered-telemetry service.
 
-## Proposed Flow
+## Demonstrated Flow
 
-Gridmetry / test publisher -> isolated NATS/MQTT broker (Phase 2, implemented) -> Go bridge (Phase 2, implemented) -> authenticated local SSE stream (Phase 2, implemented) -> [Phase 3, not yet built] supported NVIDIA hosted connector -> Omniverse scene.
+```mermaid
+flowchart TB
+  operator["Operator: watts or release at flex prompt"]
 
-Omniverse will be connected through a supported hosted interface once NVIDIA confirms it. Scene updates and modeled power must remain distinguishable from measured telemetry.
+  subgraph lab["Dev container: dsx-adapter-staged"]
+    publisher["scenario --interactive<br/>fresh command ID, timestamp and ES256 signature"]
+    broker["NATS with MQTT 3.1.1<br/>Exchange-compatible lab subset"]
+    verifier["Go adapter<br/>verify signature, schema, feed, freshness and duplicates"]
+    mapper["Visualization mapper<br/>watts to rounded 0-100 percent load"]
+    events["Authenticated SSE: GET /events<br/>container 8090, loopback 28090"]
+    asset["GET /visualization-client.js<br/>token-free client with actual profile"]
+    secrets["Local secrets volume<br/>MQTT credentials, signing keys, SSE token"]
+    configuration["compose.stage.yaml<br/>EDP, baseline and shared watt ceiling"]
+  end
+
+  subgraph mac["Mac / VS Code shared browser: NVIDIA Build page"]
+    forwarding["Private VS Code port forwarding<br/>Mac localhost:28090 to container localhost:28090"]
+    loader["Console loader<br/>verify script fingerprint and mount widget"]
+    widget["Browser receiver<br/>authenticate, validate, deduplicate, apply and restore"]
+    controls["Electrical UI<br/>Load percent, EDP and zero failed RPPs"]
+    table["Frontend-calculated electrical table<br/>power, current and feeder loading"]
+    sdk["Existing NVIDIA streaming SDK<br/>already connected by the page"]
+    video["Streamed digital-twin view"]
+  end
+
+  subgraph nvidia["NVIDIA-hosted DSX"]
+    gateway["api.ngc.nvidia.com<br/>DSX blueprint signaling gateway"]
+    kit["Omniverse Kit / USD scene<br/>scene message handlers and rendering"]
+  end
+
+  operator --> publisher
+  secrets -. "publisher credentials and private signing key" .-> publisher
+  publisher -->|"signed loadtarget, MQTT QoS 1"| broker
+  broker -->|"subscription delivery"| verifier
+  secrets -. "subscriber credentials, public key and SSE auth" .-> verifier
+  verifier --> mapper
+  configuration -. "profile and acceptance policy" .-> mapper
+  mapper -->|"correlated receipt with visual target"| events
+  mapper -. "generated profile" .-> asset
+  events --> forwarding
+  asset --> forwarding
+  forwarding -->|"verified token-free script"| loader
+  loader --> widget
+  operator -. "enters local SSE token directly" .-> widget
+  forwarding -->|"Bearer-authenticated event stream"| widget
+  events -. "matching command-ID receipt, not execution ACK" .-> publisher
+  widget -->|"ordinary UI input and button events"| controls
+  controls -->|"demo calculations"| table
+  controls -->|"powerFailure presentation message"| sdk
+  sdk -. "WSS signaling and ICE negotiation" .-> gateway
+  gateway -. "hosted session signaling" .-> kit
+  sdk -->|"application messages over WebRTC datachannel"| kit
+  kit -->|"rendered video over WebRTC"| sdk
+  sdk --> video
+```
+
+The interactive publisher signs and sends Flex commands to NATS. The adapter verifies them and emits a correlated receipt plus visual target. The widget receives that target and operates the existing page; it does not connect directly to NATS or open a second NVIDIA stream. The local event token, MQTT credentials and signing key have different roles and are not interchangeable. The power table is calculated in the frontend, while the existing SDK carries presentation messages and rendered video. Neither the table nor a signaling acknowledgement is physical power telemetry or a remote execution ACK.
+
+The lab is an Exchange-compatible event-bus subset, and the browser receiver is a bounded demo integration. UI updates and modeled power must remain distinguishable from measured telemetry; independent hosted SDK connectivity and production lifecycle remain separate work.
+
+### Watt-to-Load Examples
+
+Current staged settings: **EDP 1.2, zero failed RPPs, 80% startup/release baseline, and 1,316,000 W target ceiling**. The mapper chooses the highest whole-percent load whose total displayed power does not exceed the entered target. The demo rounds each of four RPPs to whole kW, so displayed totals can be below the requested watts.
+
+| Input at `flex>` | Applied Load | Displayed Total Power |
+| --- | ---: | ---: |
+| `100000` | 7% | 92 kW |
+| `250000` | 18% | 236 kW |
+| `500000` | 38% | 500 kW |
+| `650000` | 49% | 644 kW |
+| `800000` | 60% | 788 kW |
+| `920000` | 70% | 920 kW |
+| `1000000` | 76% | 1,000 kW |
+| `1052000` | 80% | 1,052 kW |
+| `1200000` | 91% | 1,196 kW |
+| `1316000` | 100% | 1,316 kW |
+| `release` | 80% | 1,052 kW |
+
+`release` returns to the configured baseline, not zero load. `quit` closes the publisher without implicitly releasing; widget Disconnect restores the pre-connection UI state, which may be stopped at 0%. Zero and negative watt inputs are rejected. Changing EDP changes this table; these are visualization values, not measured cluster consumption.
 
 ## Reference Repositories
 

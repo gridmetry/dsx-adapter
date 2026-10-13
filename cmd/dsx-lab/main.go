@@ -43,5 +43,5 @@ Subcommands:
   init      Generate isolated local secrets/config into the shared secrets volume.
   serve     Run the MQTT-to-SSE bridge service.
   check     Bounded readiness probe (used as a Compose healthcheck).
-  scenario  Subscribe, publish one signed command, and verify receipt.`)
+	scenario  Publish and verify a signed command; --interactive accepts repeated targets.`)
 }

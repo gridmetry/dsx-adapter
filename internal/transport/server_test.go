@@ -28,6 +28,33 @@ func newTestServer(t *testing.T, ready bool) (*Server, *httptest.Server) {
 	return s, srv
 }
 
+func TestVisualizationAssetIsOptionalAndDoesNotGrantEventAccess(t *testing.T) {
+	server := &Server{Hub: NewHub(1), Token: "private-test-token", AllowOrigin: "https://build.nvidia.com"}
+	request := httptest.NewRequest(http.MethodGet, "/visualization-client.js", nil)
+	missing := httptest.NewRecorder()
+	server.Mux().ServeHTTP(missing, request)
+	if missing.Code != http.StatusNotFound {
+		t.Fatal("default server exposed a visual client")
+	}
+	server.VisualizationClient = "token-free-client-source"
+	request.Header.Set("Origin", server.AllowOrigin)
+	response := httptest.NewRecorder()
+	server.Mux().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != server.VisualizationClient ||
+		response.Header().Get("Content-Type") != "text/javascript; charset=utf-8" ||
+		response.Header().Get("Cache-Control") != "no-store" ||
+		response.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		response.Header().Get("Access-Control-Allow-Origin") != server.AllowOrigin ||
+		strings.Contains(response.Body.String(), server.Token) {
+		t.Fatal("unsafe visualization asset response")
+	}
+	denied := httptest.NewRecorder()
+	server.Mux().ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/events", nil))
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatal("public script granted authenticated event access")
+	}
+}
+
 func TestHealthzAlwaysOK(t *testing.T) {
 	_, srv := newTestServer(t, false)
 	resp, err := http.Get(srv.URL + "/healthz")

@@ -5,11 +5,13 @@
 package bridge
 
 import (
+	"encoding/json"
 	"log"
 	"time"
 
 	"gridmetry/dsx-adapter/internal/flex"
 	"gridmetry/dsx-adapter/internal/lab"
+	"gridmetry/dsx-adapter/internal/presentation"
 )
 
 // InboundMessage is one raw MQTT PUBLISH payload queued for processing.
@@ -30,11 +32,12 @@ type Publisher interface {
 // when the queue is full, which is reported honestly rather than claimed
 // as durable delivery.
 type Pipeline struct {
-	Codec *flex.Codec
-	Hub   Publisher
-	Stats *lab.Stats
-	queue chan InboundMessage
-	nowFn func() time.Time
+	Codec         *flex.Codec
+	Hub           Publisher
+	Stats         *lab.Stats
+	Visualization *presentation.Mapper
+	queue         chan InboundMessage
+	nowFn         func() time.Time
 }
 
 // NewPipeline creates a pipeline with a bounded inbound queue of the given
@@ -119,6 +122,21 @@ func (p *Pipeline) process(msg InboundMessage) {
 	if err != nil {
 		log.Printf("bridge: failed to marshal normalized event: %v", err)
 		return
+	}
+	if p.Visualization != nil {
+		command, mapErr := p.Visualization.Map(*event, p.nowFn())
+		if mapErr != nil {
+			log.Printf("bridge: visualization omitted for command %s: %v", event.ID, mapErr)
+		} else {
+			data, err = json.Marshal(struct {
+				*flex.NormalizedEvent
+				Visualization presentation.Command `json:"visualization"`
+			}{event, command})
+			if err != nil {
+				log.Printf("bridge: failed to marshal visualization receipt")
+				return
+			}
+		}
 	}
 	p.Hub.Publish(data)
 }
