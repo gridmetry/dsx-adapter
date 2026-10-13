@@ -569,6 +569,12 @@
 
 **Validation and delivery:** Nineteen offline Node tests passed, covering EDP/fault remapping and later commands, conservative rounding, all-failed recovery, transient video loss, interval-expiry recovery, newer-target ownership, release, duration, authentication and restoration. Go presentation/transport/lab tests and focused vet passed; re-review returned APPROVED. Rebuilt only the owned staged bridge, verified ready and served fingerprint `0d51b5bd1edb8330954c5ade951653976ddaf1e8c2465554a31a3631743809c4`, and updated only the loader's pin. No NVIDIA session or fault was created, no live target was published, and the changed fault-adaptation behavior was not tested on the hosted scene. Re-inject the current loader to replace an older widget before live use.
 
+## Checkpoint 042: Independent Operator How-To Added (2026-10-13)
+
+**Architect request and deliverable:** Consolidate a guide so other developers can run the POC without this chat. Added How To Run The POC near the README start, with prerequisites, project/container context, idempotent credential initialization, staged startup/readiness, private browser-side port forwarding, correct local-token retrieval, NVIDIA scene selection, saved loader injection, widget connection, repeated signed targets, explicit release, restoration, volume-preserving shutdown and troubleshooting. Clarified that this browser path needs no local GPU or NVIDIA API key, while NVIDIA access/terms/session restrictions still apply.
+
+**Validation and limits:** Checked all eight guide sections, local links, merged staged profile and equal 1,316,000 W limits, private port 28090 binding, and saved-loader match to the currently served script. Markdown diagnostics were clean. This was documentation-only: no secrets were read, services restarted, command published or NVIDIA session created. The walkthrough assembles previously verified operations; a separate fresh-machine operator rehearsal was not performed.
+
 ## Future Checkpoint Format
 
 For each checkpoint record date, stage, scope, evidence, decisions, files changed, exact validation results, blockers, and next action. Use explicit `proposed`, `verified`, `approved`, and `blocked` labels. Keep secret values and sensitive endpoint details out of this log.

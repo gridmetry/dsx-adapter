@@ -1,6 +1,102 @@
 # Gridmetry DSX Adapter
 
-Connect Gridmetry's flexibility messages to a NVIDIA-hosted Omniverse demonstration without a local GPU. The first working component checks NVCF access safely; the local Exchange bridge and hosted scene connection are subsequent MVP phases.
+Connect signed Gridmetry flexibility messages through a local Exchange-compatible broker and Go adapter to the NVIDIA-hosted DSX page, without a local GPU. The browser receiver POC has been demonstrated end to end; the separate NVCF discovery CLI and standalone SDK probe are not required for this walkthrough.
+
+## How To Run The POC
+
+### 1. Prerequisites
+
+- This repository checked out, Docker running, and Docker Compose **2.24.4 or newer**. The Docker build supplies Go; installing Go is only necessary for development/tests.
+- A modern browser able to run NVIDIA's public DSX Experience and its DevTools Console. A local NVIDIA GPU and NVIDIA API key are **not required for this browser workflow**. Hosted availability, terms and session limits are controlled by NVIDIA; use your own permitted access and do not bypass login, challenge or account restrictions.
+- Run the shell commands below from this project directory, inside the dev container when using this workspace. On a standalone checkout, use its project directory rather than the workspace-specific path. Keep ports and credentials private.
+
+### 2. Start The Local Broker And Adapter
+
+```sh
+cd /workspace/dsx-adapter
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --build init
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml up -d --build --wait --wait-timeout 90 broker bridge
+curl --fail http://127.0.0.1:28090/readyz
+```
+
+The final response must contain `"status":"ready"`. Init creates the lab signing key, MQTT identities and event token in the private Docker volume, and reuses a complete existing credential set. Do not delete that volume just to restart services. This is the local Exchange-event-bus-compatible test subset, not a full upstream Exchange deployment.
+
+### 3. Make The Adapter Reachable From Your Browser
+
+The HTTP port is `28090`; MQTT is `21883`. If Docker and the browser run on the same computer, the loopback address may already work. If using this remote/dev-container workspace, open VS Code's **Ports** panel and privately forward container port `28090` to **localhost:28090 on the computer running your browser**. Do not expose it publicly or bind it to all interfaces. The receiver currently uses that exact local address.
+
+Open `http://127.0.0.1:28090/readyz` in that browser. It must return ready. Container-terminal curl success alone does not prove that your browser computer can reach the adapter. Only port 28090 is needed by the browser; the Compose publisher uses MQTT internally.
+
+### 4. Retrieve Your Local Lab Event Token
+
+Run this yourself in the container terminal:
+
+```sh
+docker cp dsx-adapter-staged-bridge-1:/secrets/sse-token - | tar -xOf - sse-token
+```
+
+The output is a secret read-only credential for the adapter's event stream, **not** a NVIDIA API key or MQTT publishing password. Keep it out of chat, logs, screenshots and Git; enter it only into the widget's password field. The correct tar member is `sse-token`, not `.`. If you save a local copy, use an ignored `*.token` file; never commit or bake it into an image.
+
+### 5. Start The NVIDIA Scene And Install The Receiver
+
+Open [NVIDIA Omniverse DSX Blueprint](https://build.nvidia.com/nvidia/omniverse-dsx-blueprint-for-ai-factories), select Experience and wait until the scene is actually streaming. Open **Simulations → Electrical**. For a reproducible baseline, set EDP **1.2** and failed RPPs **0**, matching the current staged profile.
+
+Open that page's **DevTools Console** and run the complete contents of [plan/inject-browser-receiver.js](plan/inject-browser-receiver.js). This verifies the local script fingerprint, replaces an older widget and installs a new idle **DSX Exchange** widget. It contains no credentials and does not create a separate NVIDIA connection. If the browser blocks execution or asks for a security/challenge action, do not disable protections; use the permitted manual workflow or report the exact nonsecret error.
+
+The loader's pin matches the currently reviewed deployment. After changing receiver code, EDP, feed or baseline and rebuilding the adapter, the generated script fingerprint can change; update the saved pin only after verifying the intended source. Do not remove fingerprint verification to make a mismatch disappear.
+
+### 6. Connect The Widget
+
+Enter the local lab token directly in **Lab event token**, choose Duration (default **8 minutes**, supported **1–10**), and click **Connect**. Wait for **`receiving`**. Connection sets the configured baseline load (currently **80%**) and starts the Electrical test. The widget duration, publisher duration and NVIDIA session duration are independent; eight minutes does not extend a nearly expired NVIDIA session. Refreshing the NVIDIA page removes the injected widget, so install it again after reload.
+
+### 7. Send Repeated Signed Power Targets
+
+In a second container terminal, from the same project directory:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml run --rm --build --no-deps scenario --interactive
+```
+
+At `flex>`, type one command per line, checking the widget and power table after each:
+
+```text
+1316000
+920000
+650000
+release
+quit
+```
+
+With EDP 1.2 and no failed RPPs, these targets show **100% / 1,316 kW**, **70% / 920 kW**, and **49% / 644 kW**. Release returns to **80% / 1,052 kW**. The publisher loads its separate MQTT credentials/signing key automatically, sends a fresh ES256-signed command over MQTT and waits for the adapter receipt. The widget should show `target_applied` or `release_applied`. For stronger evidence, compare the receipt's command ID with `window.__gridmetryReceiver.report().lastId` in DevTools; that public report contains no token.
+
+Terminal receipt success alone is not proof of browser execution. If the widget is disconnected/expired, publishing can still succeed locally without changing the scene. Power values are demo calculations, not measured cluster demand. See [watt-to-load examples](#watt-to-load-examples) and the [component diagram](#demonstrated-flow).
+
+### 8. Release, Disconnect And Stop
+
+Send **`release` before `quit`** to remove the target. Quit, EOF and Ctrl+C close the publisher but do not implicitly release. Click widget **Disconnect** to restore its captured pre-connection load/running state; it preserves any EDP/failure choices you manually changed.
+
+To stop only this local lab while keeping credentials and broker data:
+
+```sh
+docker compose -p dsx-adapter-staged -f compose.yaml -f compose.stage.yaml down
+```
+
+Do not add `-v` unless you intentionally want to delete the local lab's keys/data; generated credentials are different afterward and saved tokens become invalid.
+
+### Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Loader cannot fetch the script | Docker adapter ready, private port 28090 forwarded to the browser computer, browser CORS/local-network permission. |
+| Receiver fingerprint mismatch | Saved loader versus intended deployed generated profile; changing source/profile requires a reviewed pin update. |
+| Adapter authentication rejected | Use the generated local SSE token, not `test`, a NVIDIA key, quotes or tar error text. |
+| Simulation not ready at Connect | Wait for video, select Electrical, and ensure supported EDP/RPP controls are present. Start a new permitted NVIDIA session if it expired. |
+| `paused_faults` / `paused_ui` while receiving | All RPPs failed or the UI is unavailable. The adaptive receiver stays connected and resumes a valid pending target when the UI recovers. |
+| `time_limit` / session expired | Receiver and NVIDIA timers are separate. Reinstall/reconnect the receiver as needed; no automatic session restart occurs. |
+| Publisher target rejected | Use positive watts up to the advertised limit; current staged limit is 1,316,000 W. Bridge policy still enforces its own ceiling. |
+| Receipt printed, but no UI update | Check receiver applied ID, state and the current power table; SSE has no replay of events missed while disconnected. |
+
+Manual EDP/failure changes are preserved and remap an active accepted watt target under the current UI calculation. They do not raise the adapter's configured target ceiling. Adaptive fault behavior has offline coverage; do not mistake it for physical fault/power validation.
 
 ## Current Status
 
